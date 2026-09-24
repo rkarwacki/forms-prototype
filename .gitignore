@@ -1,0 +1,4 @@
+node_modules/
+cdk.out/
+web/cdk-outputs.json
+.DS_Store

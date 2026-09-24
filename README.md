@@ -29,6 +29,16 @@ Browser (web/)                          AWS (infra/, one CDK stack)
                           Mock external API (separate API Gateway)
 ```
 
+### Submission workflow
+
+The state machine as shown in the Step Functions console. Every Lambda step
+has a Catch that routes to `MarkFailed`; the delivery steps first retry
+temporary errors with exponential backoff.
+
+![Submission workflow state machine](docs/state-machine.webp)
+
+### Project layout
+
 | Path | Contents |
 |---|---|
 | `infra/` | CDK app: `forms-stack.ts` (all resources), `submission-workflow.ts` (state machine) |

@@ -8,6 +8,8 @@ import { AttributeType, BillingMode, Table } from 'aws-cdk-lib/aws-dynamodb';
 import { BlockPublicAccess, Bucket, BucketEncryption, HttpMethods } from 'aws-cdk-lib/aws-s3';
 import { CorsHttpMethod, HttpApi, HttpMethod } from 'aws-cdk-lib/aws-apigatewayv2';
 import { HttpLambdaIntegration } from 'aws-cdk-lib/aws-apigatewayv2-integrations';
+import { PolicyStatement } from 'aws-cdk-lib/aws-iam';
+import { EmailIdentity, Identity } from 'aws-cdk-lib/aws-ses';
 import { SubmissionWorkflow } from './submission-workflow';
 
 // A stack is one deployable unit: everything in it is created, updated
@@ -60,6 +62,17 @@ export class FormsStack extends Stack {
       autoDeleteObjects: true,
     });
 
+    // --- Email sender (Amazon SES) -----------------------------------------
+    // SES only sends from verified identities. Creating this identity makes
+    // SES email a verification link to the address; click it before the
+    // first submission. Pass the address at deploy time:
+    //   npm run deploy -- -c senderEmail=you@example.com
+    const senderEmail: string | undefined = this.node.tryGetContext('senderEmail');
+    if (!senderEmail) {
+      throw new Error('Missing sender address: deploy with -c senderEmail=you@example.com');
+    }
+    new EmailIdentity(this, 'SenderIdentity', { identity: Identity.email(senderEmail) });
+
     // --- Lambdas ----------------------------------------------------------
     // NodejsFunction bundles a TypeScript file with esbuild into a small zip.
     // Each function gets its own IAM role, and only the grants below.
@@ -93,6 +106,7 @@ export class FormsStack extends Stack {
     const uploadUrlFn = createFunction('UploadUrlFn', 'upload-url.ts');
 
     // --- Mock external systems ----------------------------------------------
+    // Salesforce only; email goes through SES (above).
     // Its own API, so our code reaches it over HTTP like a real third party.
     const mockExternalFn = createFunction('MockExternalFn', 'mocks/external-systems.ts', {
       FAILURE_RATE: '0.5', // Salesforce mock fails 50% of calls
@@ -103,11 +117,6 @@ export class FormsStack extends Stack {
       methods: [HttpMethod.POST],
       integration: new HttpLambdaIntegration('MockSalesforceIntegration', mockExternalFn),
     });
-    mockApi.addRoutes({
-      path: '/email/send',
-      methods: [HttpMethod.POST],
-      integration: new HttpLambdaIntegration('MockEmailIntegration', mockExternalFn),
-    });
 
     // --- Workflow step Lambdas ------------------------------------------------
     const scanAttachmentsFn = createFunction('ScanAttachmentsFn', 'workflow/scan-attachments.ts');
@@ -117,7 +126,7 @@ export class FormsStack extends Stack {
       MOCK_API_URL: mockApi.apiEndpoint,
     });
     const sendEmailFn = createFunction('SendEmailFn', 'workflow/send-email.ts', {
-      MOCK_API_URL: mockApi.apiEndpoint,
+      SENDER_EMAIL: senderEmail,
     });
 
     const workflow = new SubmissionWorkflow(this, 'SubmissionWorkflow', {
@@ -152,6 +161,16 @@ export class FormsStack extends Stack {
     evidence.grantPut(generateDorFn);
     attachments.grantRead(archiveEvidenceFn); // copy source
     evidence.grantPut(archiveEvidenceFn); // copy destination
+    // SES checks ses:SendEmail against the sender identity and, while the
+    // account is in the SES sandbox, against each recipient's identity too.
+    // Recipients vary per submission, so allow any identity in this account
+    // and region (only verified identities can be used anyway).
+    sendEmailFn.addToRolePolicy(
+      new PolicyStatement({
+        actions: ['ses:SendEmail'],
+        resources: [this.formatArn({ service: 'ses', resource: 'identity', resourceName: '*' })],
+      }),
+    );
 
     // --- API Gateway (HTTP API) -------------------------------------------
     // The HTTP API is the cheaper, simpler API Gateway flavour. It maps

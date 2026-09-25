@@ -4,7 +4,7 @@ import { json } from '../shared/http';
 
 const FAILURE_RATE = Number(process.env.FAILURE_RATE ?? '0');
 
-// MOCK of the external systems (Salesforce, email provider). Deployed behind
+// MOCK of the external systems (Salesforce). Deployed behind
 // its own API, separate from the forms API, so it behaves like a third-party
 // service: our workflow reaches it over HTTP just as it would the real thing.
 //
@@ -42,12 +42,6 @@ export const handler = async (event: APIGatewayProxyEventV2) => {
       const caseId = '500' + hash(idempotencyKey).slice(0, 12).toUpperCase();
       console.log('Salesforce mock: case created', { caseId, case: body });
       return json(201, { id: caseId, success: true });
-    }
-
-    case 'POST /email/send': {
-      const messageId = `msg-${hash(idempotencyKey).slice(0, 16)}`;
-      console.log('Email mock: email accepted', { messageId, email: body });
-      return json(202, { messageId });
     }
 
     default:
